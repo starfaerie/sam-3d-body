@@ -83,17 +83,13 @@ def create_webdatset_shard(
         anno["keypoints_2d"] = np.stack(row["keypoints_2d"])
         anno["keypoints_3d"] = np.stack(row["keypoints_3d"])
 
-        proto_params: Dict[str, np.ndarray] = {}
-        proto_params["global_rot"] = row["global_rot"]
-        proto_params["body_pose_params"] = row["body_pose_params"]
-        proto_params["hand_pose_params"] = row["hand_pose_params"]
-        proto_params["scale_params"] = row["scale_params"]
-        proto_params["shape_params"] = row["shape_params"]
-        proto_params["expr_params"] = row["expr_params"]
-        anno["proto_params"] = proto_params
+        mhr_params: Dict[str, np.ndarray] = {}
+        mhr_params["model_params"] = row["model_params"]
+        mhr_params["shape_params"] = row["shape_params"]
+        anno["mhr_params"] = mhr_params
 
-        anno["proto_valid"] = row["proto_valid"]
-        anno["proto_version"] = row["date"]
+        anno["mhr_valid"] = row["mhr_valid"]
+        anno["mhr_version"] = row["date"]
 
         anno["bbox"] = row["bbox"]
         anno["bbox_format"] = row["bbox_format"]
@@ -102,7 +98,6 @@ def create_webdatset_shard(
         anno["scale"] = np.array(row["bbox_scale"])
 
         metadata: Dict[str, Any] = {}
-        metadata["cam_trans"] = row["global_trans"]
         metadata["cam_int"] = np.stack(row["cam_int"])
         metadata["loss"] = row.get("loss", 0.0)
         anno["metadata"] = metadata
