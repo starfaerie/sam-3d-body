@@ -427,7 +427,3 @@ Masks are encoded via:
 - **SAM-3D Body**: Meta AI Research
 - **Prompt Encoder**: Based on SAM (Segment Anything Model)
 - **Keypoint Conditioning**: Enables prompt-guided 3D reconstruction
-
-## License
-
-Copyright (c) Meta Platforms, Inc. and affiliates.
