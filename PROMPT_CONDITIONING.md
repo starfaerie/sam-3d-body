@@ -15,7 +15,7 @@ These prompts are processed by the model's prompt encoder and used to condition 
 
 ## Supported Prompt Types
 
-### 1. Keypoint Prompts
+### 1. Keypoint Prompts (Sparse Token Conditioning)
 
 **Input**: 2D keypoint coordinates in pixel space
 
@@ -30,48 +30,137 @@ The model can accept keypoints in multiple formats:
 | 70 | `mhr70` | Model's native internal format |
 | Other | `custom_N` | Custom format with N keypoints |
 
-**How it works**:
+#### Important: All Keypoints Sent, But Only ONE Used
+
+**You provide**: All K keypoints (e.g., 133 for COCO-WholeBody)
+**Model uses**: ONE intelligently selected keypoint as a prompt token
+
+**Why this design?** SAM-style sparse prompting - one well-chosen anchor point guides the entire prediction without introducing noise from multiple conflicting prompts.
+
+#### How Keypoint Selection Works:
+
 ```
-Input: keypoints_2d [N, K, 2] in pixel coordinates
-  ↓
-Validation and normalization
-  ↓
-Transform to crop coordinates [-0.5, 0.5]
-  ↓
-Sample one keypoint for prompting
-  ↓
-Prompt encoder embeds keypoint → [B, 1, 1280]
-  ↓
-Project to decoder dimension → [B, 1, 1024]
-  ↓
-Concatenate with pose tokens
-  ↓
-Decoder cross-attention → improved 3D predictions
+1. YOU SEND: All keypoints [N, K, 2] with scores [N, K]
+   Example: 133 keypoints from COCO-WholeBody
+   ↓
+2. MODEL RECEIVES: All keypoints in batch["keypoints_2d"]
+   ↓
+3. AUTOMATIC FILTERING: Keypoints with confidence < 0.5 excluded
+   ↓
+4. INTELLIGENT SELECTION (Prioritized order):
+   • Body keypoints (shoulders, hips, elbows, wrists) - BEST
+   • Hand keypoints (if body unavailable) - FALLBACK
+   • Face keypoints (if hands unavailable) - FALLBACK
+   • Dummy prompt (if all low confidence) - MODEL STILL WORKS
+   ↓
+5. ONE KEYPOINT SELECTED: Best from available options
+   Example: Right shoulder at (x=512, y=300) with conf=0.9
+   ↓
+6. EMBEDDING: [B, 1, 3] → Prompt Encoder → [B, 1, 1280]
+   ↓
+7. PROJECTION: [B, 1, 1280] → Linear → [B, 1, 1024]
+   ↓
+8. CONCATENATION: Added as single decoder token
+   [pose_tokens, prev_estimate_token, keypoint_prompt_token]
+   ↓
+9. DECODER: Cross-attention uses this ONE token to guide ALL 70 joint predictions
 ```
+
+#### Robustness to Missing/Low-Confidence Keypoints
+
+**Scenario 1: Full body visible**
+- Input: 133 keypoints, 17 body keypoints high confidence (>0.8)
+- Selected: Best body keypoint (e.g., shoulder)
+- Result: Optimal conditioning ✅
+
+**Scenario 2: Hand close-up (body not visible)**
+- Input: 133 keypoints, 42 hand keypoints high confidence (>0.7), body/face low (<0.2)
+- Selected: Best hand keypoint (e.g., wrist)
+- Result: Still useful conditioning ✅
+
+**Scenario 3: Heavy occlusion**
+- Input: 133 keypoints, most low confidence (<0.5), only 3 face keypoints >0.5
+- Selected: Best face keypoint
+- Result: Limited but still helpful ✅
+
+**Scenario 4: Complete failure**
+- Input: 133 keypoints, ALL confidence <0.5
+- Selected: Dummy prompt (special learned embedding)
+- Result: Model works like baseline (no conditioning benefit) ✅
+
+#### Benefits of Sending All Keypoints
+
+✅ **Larger selection pool**: More options for intelligent selection
+✅ **Robust fallback**: Body → Hands → Face → Dummy
+✅ **Automatic adaptation**: Model picks best available keypoint
+✅ **No preprocessing needed**: Send all, let model decide
 
 **Benefits**:
 - More accurate joint localization
 - Better handling of occlusions
 - Improved hand and face reconstruction
-- Helps disambiguate pose ambiguities
+- Helps disambiguate pose ambiguities (e.g., facing forward vs backward)
+- Works even with partial keypoints
 
-### 2. Mask Prompts
+### 2. Mask Prompts (Dense Spatial Conditioning)
 
 **Input**: Binary segmentation masks [N, H, W]
 
-Masks are processed differently from keypoints:
-- Downscaled by the prompt encoder
-- Added to image embeddings at the encoder level
-- Provide spatial guidance about the person region
+Masks work **completely differently** from keypoints - they provide dense spatial features rather than sparse tokens.
+
+#### How Mask Conditioning Works:
+
+```
+1. YOU SEND: Full-resolution binary mask [N, H, W]
+   Example: 1920×1080 segmentation mask
+   ↓
+2. MODEL RECEIVES: Mask in batch["mask"]
+   ↓
+3. CNN DOWNSCALING: Multi-layer convolution network
+   v1: Conv(4×4) → Conv(4×4) → Conv(1×1) = 16× reduction
+   v2: Conv(2×2) × 4 layers = 16× reduction
+
+   [N, H, W] → [N, C, H/16, W/16]
+   Example: [1, 1920, 1080] → [1, 1280, 120, 67.5]
+   ↓
+4. SPATIAL FEATURE MAP: Dense features matching image embeddings size
+   ↓
+5. ELEMENT-WISE ADDITION: Added directly to image embeddings
+   image_embeddings = image_embeddings + mask_embeddings
+   ↓
+6. ENCODER-LEVEL CONDITIONING: Affects ALL feature extraction
+   Not just decoder - the entire image representation is guided
+```
+
+#### Key Differences from Keypoint Prompts
+
+| Aspect | Keypoint Prompts | Mask Prompts |
+|--------|------------------|--------------|
+| **Input Type** | Sparse coordinates | Dense spatial mask |
+| **Processing** | Select ONE best keypoint | Downsample ENTIRE mask |
+| **Output** | Single token [B, 1, C] | Feature map [B, C, H/16, W/16] |
+| **Integration** | Concatenated as decoder token | Added to image embeddings |
+| **Scope** | Decoder-level guidance | Encoder-level guidance |
+| **Effect** | Anchors pose prediction | Focuses spatial attention |
 
 **Benefits**:
 - Focuses model attention on the correct region
 - Reduces confusion in multi-person scenes
+- Provides spatial context throughout entire network
 - Works complementary with keypoint prompts
 
-### 3. Combined Prompting
+### 3. Combined Prompting (Recommended)
 
-You can use **both** keypoints and masks together for maximum accuracy. The model will leverage both types of conditioning information.
+You can use **both** keypoints and masks together for maximum accuracy:
+
+- **Mask**: Provides spatial context (encoder-level) → "Focus on this region"
+- **Keypoint**: Provides pose anchor (decoder-level) → "This joint is here"
+
+Together they offer complementary benefits:
+- Mask filters out background/other people (spatial)
+- Keypoint anchors the 3D pose estimate (semantic)
+
+This is the most robust configuration for in-the-wild images.
 
 ## API Usage
 
@@ -222,6 +311,79 @@ Fallback helper to create bounding boxes from keypoints when no detection is ava
 ### Issue: TypeError about keypoints_2d parameter
 
 **Solution**: Ensure you're using an updated version of sam_3d_body_estimator.py with keypoint parameters added to the API.
+
+## Visual Summary: Keypoints vs Masks
+
+### Data Flow Comparison
+
+```
+KEYPOINT PROMPTS (Sparse Token):
+┌─────────────────────────────────┐
+│ You Send: 133 keypoints         │
+│ [N, 133, 2] + scores [N, 133]   │
+└────────────┬────────────────────┘
+             │ All sent
+             ▼
+┌─────────────────────────────────┐
+│ Model: Intelligent Selection    │
+│ • Filter conf < 0.5              │
+│ • Try body joints first          │
+│ • Fallback to hands/face         │
+│ • Select BEST ONE                │
+└────────────┬────────────────────┘
+             │ ONE keypoint
+             ▼
+┌─────────────────────────────────┐
+│ Embedding: [B, 1, 1280]         │
+│ Single prompt token              │
+└────────────┬────────────────────┘
+             │ Concatenate
+             ▼
+┌─────────────────────────────────┐
+│ Decoder: Cross-attention        │
+│ ONE anchor guides ALL joints    │
+└─────────────────────────────────┘
+
+MASK PROMPTS (Dense Spatial):
+┌─────────────────────────────────┐
+│ You Send: Full mask              │
+│ [N, 1920, 1080] binary           │
+└────────────┬────────────────────┘
+             │ Entire mask
+             ▼
+┌─────────────────────────────────┐
+│ CNN: Downscale 16×               │
+│ Conv layers preserve shape       │
+└────────────┬────────────────────┘
+             │ Feature map
+             ▼
+┌─────────────────────────────────┐
+│ Feature Map: [B, C, H/16, W/16] │
+│ Dense spatial features           │
+└────────────┬────────────────────┘
+             │ Element-wise add
+             ▼
+┌─────────────────────────────────┐
+│ Image Embeddings: Modified      │
+│ Spatial attention throughout     │
+└─────────────────────────────────┘
+```
+
+### Key Takeaways
+
+**Keypoints**:
+- ✅ Send ALL keypoints → Model selects ONE
+- ✅ Sparse single-token conditioning
+- ✅ Decoder-level guidance
+- ✅ Semantic anchor for pose
+
+**Masks**:
+- ✅ Send FULL mask → Model downscales ENTIRE mask
+- ✅ Dense spatial feature map
+- ✅ Encoder-level guidance
+- ✅ Spatial attention for region
+
+**Together**: Complementary conditioning at different levels!
 
 ## Technical Details
 
