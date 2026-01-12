@@ -169,19 +169,19 @@ def compact_cont_to_model_params_hand(hand_cont):
     assert sum(hand_dofs_in_order) == 27
     # Mask of 3DoFs into hand_cont
     mask_cont_threedofs = torch.cat(
-        [torch.ones(2 * k).bool() * (k in [3]) for k in hand_dofs_in_order]
+        [torch.ones(int(2 * k)).bool() * (k in [3]) for k in hand_dofs_in_order.tolist()]
     )
     # Mask of 1DoFs (including 2DoF) into hand_cont
     mask_cont_onedofs = torch.cat(
-        [torch.ones(2 * k).bool() * (k in [1, 2]) for k in hand_dofs_in_order]
+        [torch.ones(int(2 * k)).bool() * (k in [1, 2]) for k in hand_dofs_in_order.tolist()]
     )
     # Mask of 3DoFs into hand_model_params
     mask_model_params_threedofs = torch.cat(
-        [torch.ones(k).bool() * (k in [3]) for k in hand_dofs_in_order]
+        [torch.ones(int(k)).bool() * (k in [3]) for k in hand_dofs_in_order.tolist()]
     )
     # Mask of 1DoFs (including 2DoF) into hand_model_params
     mask_model_params_onedofs = torch.cat(
-        [torch.ones(k).bool() * (k in [1, 2]) for k in hand_dofs_in_order]
+        [torch.ones(int(k)).bool() * (k in [1, 2]) for k in hand_dofs_in_order.tolist()]
     )
 
     # Convert hand_cont to eulers
@@ -211,19 +211,19 @@ def compact_model_params_to_cont_hand(hand_model_params):
     assert sum(hand_dofs_in_order) == 27
     # Mask of 3DoFs into hand_cont
     mask_cont_threedofs = torch.cat(
-        [torch.ones(2 * k).bool() * (k in [3]) for k in hand_dofs_in_order]
+        [torch.ones(int(2 * k)).bool() * (k in [3]) for k in hand_dofs_in_order.tolist()]
     )
     # Mask of 1DoFs (including 2DoF) into hand_cont
     mask_cont_onedofs = torch.cat(
-        [torch.ones(2 * k).bool() * (k in [1, 2]) for k in hand_dofs_in_order]
+        [torch.ones(int(2 * k)).bool() * (k in [1, 2]) for k in hand_dofs_in_order.tolist()]
     )
     # Mask of 3DoFs into hand_model_params
     mask_model_params_threedofs = torch.cat(
-        [torch.ones(k).bool() * (k in [3]) for k in hand_dofs_in_order]
+        [torch.ones(int(k)).bool() * (k in [3]) for k in hand_dofs_in_order.tolist()]
     )
     # Mask of 1DoFs (including 2DoF) into hand_model_params
     mask_model_params_onedofs = torch.cat(
-        [torch.ones(k).bool() * (k in [1, 2]) for k in hand_dofs_in_order]
+        [torch.ones(int(k)).bool() * (k in [1, 2]) for k in hand_dofs_in_order.tolist()]
     )
 
     # Convert eulers to hand_cont hand_cont
