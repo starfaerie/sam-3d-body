@@ -114,7 +114,7 @@ class SAM3DBodyEstimator:
             img = load_image(img, backend="cv2", image_format="bgr")
             image_format = "bgr"
         else:
-            print("####### Please make sure the input image is in RGB format")
+            # Caller is responsible for passing RGB.
             image_format = "rgb"
         height, width = img.shape[:2]
 

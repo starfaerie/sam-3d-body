@@ -308,6 +308,9 @@ class MHRHead(nn.Module):
 
         ## Get remaining parameters
         pred_shape = pred[:, count : count + self.num_shape_comps]
+        # Shape override for consensus refit (set externally via _shape_override attr)
+        if hasattr(self, '_shape_override') and self._shape_override is not None:
+            pred_shape = self._shape_override.expand(batch_size, -1).to(pred_shape.device)
         count += self.num_shape_comps
         pred_scale = pred[:, count : count + self.num_scale_comps]
         count += self.num_scale_comps
