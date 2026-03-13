@@ -19,12 +19,13 @@ from ..modules.mhr_utils import (
 from ..modules.transformer import FFN
 
 MOMENTUM_ENABLED = os.environ.get("MOMENTUM_ENABLED") is None
+MHR_LOD = int(os.environ.get("MHR_LOD", "6"))  # Default LOD 6 (595 verts) when Momentum enabled
 try:
     if MOMENTUM_ENABLED:
         from mhr.mhr import MHR
 
         MOMENTUM_ENABLED = True
-        warnings.warn("Momentum is enabled")
+        warnings.warn(f"Momentum is enabled (LOD={MHR_LOD})")
     else:
         warnings.warn("Momentum is not enabled")
         raise ImportError
@@ -108,13 +109,15 @@ class MHRHead(nn.Module):
         if MOMENTUM_ENABLED:
             self.mhr = MHR.from_files(
                 device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-                lod=1,
+                lod=MHR_LOD,
             )
+            self._mhr_lod = MHR_LOD
         else:
             self.mhr = torch.jit.load(
                 mhr_model_path,
                 map_location=("cuda" if torch.cuda.is_available() else "cpu"),
             )
+            self._mhr_lod = 1  # TorchScript model is always LOD 1
 
         for param in self.mhr.parameters():
             param.requires_grad = False
@@ -237,18 +240,33 @@ class MHRHead(nn.Module):
         # Prepare returns
         to_return = [curr_skinned_verts]
         if return_keypoints:
-            # Get sapiens 308 keypoints
-            model_vert_joints = torch.cat(
-                [curr_skinned_verts, curr_joint_coords], dim=1
-            )  # B x (num_verts + 127) x 3
-            model_keypoints_pred = (
-                (
-                    self.keypoint_mapping
-                    @ model_vert_joints.permute(1, 0, 2).flatten(1, 2)
+            num_verts = curr_skinned_verts.shape[1]
+            kpm_expected = self.keypoint_mapping.shape[1]  # 18439+127 for LOD 1 checkpoint
+            if num_verts + 127 == kpm_expected:
+                # LOD matches checkpoint: full vertex+joint keypoint regression
+                model_vert_joints = torch.cat(
+                    [curr_skinned_verts, curr_joint_coords], dim=1
+                )  # B x (num_verts + 127) x 3
+                model_keypoints_pred = (
+                    (
+                        self.keypoint_mapping
+                        @ model_vert_joints.permute(1, 0, 2).flatten(1, 2)
+                    )
+                    .reshape(-1, model_vert_joints.shape[0], 3)
+                    .permute(1, 0, 2)
                 )
-                .reshape(-1, model_vert_joints.shape[0], 3)
-                .permute(1, 0, 2)
-            )
+            else:
+                # LOD mismatch (e.g. LOD 6 verts with LOD 1 keypoint_mapping):
+                # Use only the joint columns (last 127) of keypoint_mapping.
+                kpm_joints = self.keypoint_mapping[:, -127:]  # [308, 127]
+                model_keypoints_pred = (
+                    (
+                        kpm_joints
+                        @ curr_joint_coords.permute(1, 0, 2).flatten(1, 2)
+                    )
+                    .reshape(-1, curr_joint_coords.shape[0], 3)
+                    .permute(1, 0, 2)
+                )
 
             if self.enable_hand_model:
                 # Zero out everything except for the right hand
@@ -313,6 +331,9 @@ class MHRHead(nn.Module):
             pred_shape = self._shape_override.expand(batch_size, -1).to(pred_shape.device)
         count += self.num_shape_comps
         pred_scale = pred[:, count : count + self.num_scale_comps]
+        # Scale override (same pattern as shape override)
+        if hasattr(self, '_scale_override') and self._scale_override is not None:
+            pred_scale = self._scale_override.expand(batch_size, -1).to(pred_scale.device)
         count += self.num_scale_comps
         pred_hand = pred[:, count : count + self.num_hand_comps * 2]
         count += self.num_hand_comps * 2
